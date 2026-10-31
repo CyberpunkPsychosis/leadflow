@@ -10,7 +10,7 @@ Workflows* (Pakistan, payment verified, $5–10/hr, posted 2h ago at time of wri
 Hi — I read your brief and built a working version of this pipeline before
 replying, so you can click through it instead of reading a promise.
 
-**Demo:** https://a4403d74dd6f48.lhr.life · **Code:** <GITHUB_URL>
+**Demo:** https://a4403d74dd6f48.lhr.life · **Code:** https://github.com/CyberpunkPsychosis/leadflow
 
 What it does:
 - One webhook for every lead source (ads, landing pages, forms, WhatsApp/chat),
@@ -75,6 +75,6 @@ quote the rest after the demo call.
 ## Before sending
 
 - [ ] Check the demo link opens (it is an ephemeral tunnel; restart it if it dies)
-- [ ] Push the repo to GitHub and replace `<GITHUB_URL>` (or remove that line)
+- [x] Repo pushed: https://github.com/CyberpunkPsychosis/leadflow
 - [ ] Attach the two screenshots to the portfolio item
 - [ ] Add 1 line about timezone overlap / response time (client is PKT, UTC+5)
