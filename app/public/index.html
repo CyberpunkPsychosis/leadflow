@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LeadFlow — AI lead qualification & routing</title>
+<link rel="stylesheet" href="/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M9 22V10h3.2l3.8 7 3.8-7H23v12h-3v-6.6l-3 5.4h-2l-3-5.4V22H9z' fill='white'/></svg>" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">LF</div>
+    <div>
+      <h1>LeadFlow</h1>
+      <p>AI qualification &amp; routing for inbound leads</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="engine-badge" class="badge badge-muted" title="Qualification engine">checking engine…</span>
+    <button id="btn-simulate" class="btn btn-secondary">+ Add lead</button>
+    <button id="btn-seed" class="btn btn-primary">Run demo batch</button>
+  </div>
+</header>
+
+<main>
+  <section class="stats" id="stats">
+    <article class="stat"><span class="stat-label">Inbound leads</span><strong id="s-total">0</strong><span class="stat-sub" id="s-sources">—</span></article>
+    <article class="stat"><span class="stat-label">Hot leads</span><strong id="s-hot">0</strong><span class="stat-sub" id="s-hotrate">—</span></article>
+    <article class="stat"><span class="stat-label">Avg AI score</span><strong id="s-score">0</strong><span class="stat-sub">0–100 rubric</span></article>
+    <article class="stat"><span class="stat-label">Avg qualify time</span><strong id="s-latency">0 ms</strong><span class="stat-sub">per lead</span></article>
+    <article class="stat"><span class="stat-label">Follow-ups queued</span><strong id="s-followups">0</strong><span class="stat-sub" id="s-outbox">0 emails sent</span></article>
+    <article class="stat"><span class="stat-label">Failed jobs</span><strong id="s-dlq">0</strong><span class="stat-sub">dead-letter queue</span></article>
+  </section>
+
+  <section class="toolbar">
+    <div class="tabs" id="tier-tabs">
+      <button class="tab active" data-tier="">All</button>
+      <button class="tab" data-tier="hot">Hot</button>
+      <button class="tab" data-tier="warm">Warm</button>
+      <button class="tab" data-tier="cold">Cold</button>
+    </div>
+    <div class="toolbar-right">
+      <input id="search" class="search" type="search" placeholder="Search name, company, email…" />
+      <select id="source-filter" class="select">
+        <option value="">All sources</option>
+      </select>
+      <button id="btn-advance" class="btn btn-ghost" title="Demo: make scheduled follow-ups due">Fast-forward 1 day</button>
+    </div>
+  </section>
+
+  <section class="table-wrap">
+    <table class="leads">
+      <thead>
+        <tr>
+          <th>Lead</th>
+          <th>Source</th>
+          <th>Score</th>
+          <th>Intent</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>
+      <h3>No leads yet</h3>
+      <p>Run the demo batch to send 10 realistic leads through the pipeline.</p>
+      <button class="btn btn-primary" id="btn-seed-2">Run demo batch</button>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-panel">
+  <div class="drawer-head">
+    <div>
+      <span id="d-tier" class="pill">—</span>
+      <h2 id="d-name">—</h2>
+      <p id="d-meta">—</p>
+    </div>
+    <button class="icon-btn" id="d-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <section class="card">
+      <div class="score-ring" id="d-ring"><span id="d-score">0</span><small>score</small></div>
+      <div class="ai-summary">
+        <h4 id="d-next">—</h4>
+        <p id="d-intent" class="muted">—</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h4>Why this score</h4>
+      <ul id="d-reasons" class="reasons"></ul>
+      <div id="d-missing" class="missing"></div>
+    </section>
+
+    <section class="card">
+      <h4>Original message</h4>
+      <blockquote id="d-message"></blockquote>
+      <dl class="kv">
+        <div><dt>Source</dt><dd id="d-source">—</dd></div>
+        <div><dt>Budget</dt><dd id="d-budget">—</dd></div>
+        <div><dt>Timeline</dt><dd id="d-timeline">—</dd></div>
+        <div><dt>CRM record</dt><dd id="d-crm">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h4>Follow-ups</h4>
+      <ol id="d-followups" class="timeline"></ol>
+    </section>
+
+    <section class="card">
+      <h4>Audit log</h4>
+      <ol id="d-events" class="events"></ol>
+    </section>
+  </div>
+  </div>
+</aside>
+
+<dialog id="dlg">
+  <form method="dialog" id="lead-form">
+    <h3>Add a lead</h3>
+    <div class="grid">
+      <label>Name <input name="name" required placeholder="Jane Cooper" /></label>
+      <label>Email <input name="email" type="email" required placeholder="jane@acme.com" /></label>
+      <label>Company <input name="company" placeholder="Acme Inc." /></label>
+      <label>Source
+        <select name="source">
+          <option value="website_form">Website form</option>
+          <option value="facebook_ads">Facebook lead ad</option>
+          <option value="linkedin">LinkedIn</option>
+          <option value="whatsapp">WhatsApp</option>
+          <option value="landing_page">Landing page</option>
+        </select>
+      </label>
+      <label>Budget <input name="budget" placeholder="$10k" /></label>
+      <label>Timeline <input name="timeline" placeholder="within 2 weeks" /></label>
+    </div>
+    <label class="full">Message <textarea name="message" rows="4" placeholder="What are they asking for?"></textarea></label>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn btn-ghost">Cancel</button>
+      <button value="submit" class="btn btn-primary" id="dlg-submit">Add &amp; qualify</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

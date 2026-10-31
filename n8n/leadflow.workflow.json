@@ -1,0 +1,468 @@
+{
+  "name": "LeadFlow \u2014 AI lead qualification & routing",
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "leadflow-intake",
+      "parameters": {
+        "path": "lead-intake",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-2",
+      "name": "Normalize lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\n// Normalise messy inbound payloads into one shape.\nconst input = $json.body || $json;\nconst c = input.contact || input;\nconst email = String(c.email || c.email_address || '').trim().toLowerCase();\nconst phone = String(c.phone || c.phone_number || '').replace(/[^\\d+]/g, '');\nif (!email && !phone) throw new Error('Lead needs an email or phone');\nconst aliases = { fb: 'facebook_ads', facebook: 'facebook_ads', land: 'landing_page', web: 'website_form' };\nconst rawSource = String(input.source || input.utm_source || 'website_form').toLowerCase();\nconst budgetNums = String(input.budget || input.budget_usd || '').replace(/,/g, '').match(/\\d+(?:\\.\\d+)?\\s*[km]?/gi) || [];\nlet budget = null;\nif (budgetNums.length) {\n  const toNum = (s) => { const n = parseFloat(s); return /k/i.test(s) ? n * 1000 : /m/i.test(s) ? n * 1e6 : n; };\n  budget = budgetNums.length > 1 ? Math.round((toNum(budgetNums[0]) + toNum(budgetNums[1])) / 2) : toNum(budgetNums[0]);\n}\nreturn [{ json: {\n  id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10),\n  created_at: new Date().toISOString(),\n  source: aliases[rawSource] || rawSource,\n  contact: { name: c.name || c.full_name || 'unknown', email, phone, company: c.company || c.company_name || '' },\n  message: String(input.message || input.comments || '').slice(0, 8000),\n  budget_usd: budget,\n  timeline: input.timeline || input.timeframe || null,\n  status: 'received',\n}}];\n"
+      }
+    },
+    {
+      "id": "node-3",
+      "name": "LLM qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"deepseek-chat\",\n  \"temperature\": 0.2,\n  \"response_format\": {\"type\": \"json_object\"},\n  \"messages\": [\n    {\"role\": \"system\", \"content\": \"You are a B2B lead qualification analyst. Company: Northwind Growth, revenue operations and AI automation for B2B services. Minimum budget: $5,000. Disqualify crypto/gambling/SEO link spam/students. Score 0-100 on fit (30), intent (30), urgency (20), budget (20). Tiers: hot>=70, warm 40-69, cold<40. Reply with STRICT JSON: {\\\"score\\\":number,\\\"intent\\\":string,\\\"urgency\\\":\\\"now|this_week|this_month|later|unknown\\\",\\\"budget_fit\\\":\\\"in_range|below_range|above_range|unknown\\\",\\\"reasons\\\":string[],\\\"missing_info\\\":string[],\\\"flags\\\":string[],\\\"next_action\\\":string,\\\"draft_reply\\\":string}. Never invent facts. Draft reply under 90 words.\"},\n    {\"role\": \"user\", \"content\": \"Qualify this lead: {{ JSON.stringify($json) }}\"}\n  ]\n}",
+        "options": {
+          "timeout": 20000,
+          "retry": {
+            "retry": {
+              "maxTries": 3,
+              "waitBetweenTries": 500
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 500,
+      "notes": "Any OpenAI-compatible endpoint works (OpenAI, Groq, Ollama, DeepSeek)."
+    },
+    {
+      "id": "node-4",
+      "name": "Guardrails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\n// Guardrails: accept only well-formed JSON from the model, clamp the score and\n// keep tier/score consistent. If anything is off, fall back to a rules score.\nconst lead = $('Normalize lead').first().json;\nlet raw = {};\ntry {\n  const content = $json.choices?.[0]?.message?.content ?? $json.content ?? '{}';\n  raw = JSON.parse(String(content).replace(/^\\`\\`\\`json/i, '').replace(/\\`\\`\\`$/, ''));\n} catch (e) { raw = {}; }\n\nconst score = Math.max(0, Math.min(100, Math.round(Number(raw.score) || 0)));\nlet fallback = score === 0;\n// Deterministic backstop so a broken model response never blocks the pipeline.\nif (fallback) {\n  const text = (lead.message + ' ' + lead.contact.company).toLowerCase();\n  const buying = ['need','looking for','quote','proposal','rfp','budget','evaluating'].filter(t => text.includes(t)).length;\n  const urgent = ['asap','urgent','deadline','this week','within','quarter'].filter(t => text.includes(t)).length;\n  let s = 12 + Math.min(24, buying * 4) + urgent * 10 + (lead.budget_usd >= 5000 ? 16 : 0) + (lead.contact.company ? 6 : 0);\n  raw = {\n    score: s,\n    intent: buying ? 'estimated from rules' : 'unclear',\n    urgency: urgent ? 'this_week' : 'unknown',\n    budget_fit: lead.budget_usd == null ? 'unknown' : lead.budget_usd >= 5000 ? 'in_range' : 'below_range',\n    reasons: ['LLM unavailable \u2014 deterministic fallback used.'],\n    missing_info: lead.budget_usd ? [] : ['budget'],\n    flags: ['llm_unavailable'],\n    next_action: s >= 70 ? 'Call within 15 minutes.' : 'Review manually.',\n    draft_reply: s >= 40 ? 'Hi ' + (lead.contact.name.split(' ')[0] || 'there') + ', thanks for reaching out. What does your ideal start date look like?' : '',\n  };\n}\nconst tier = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold';\nreturn [{ json: { ...lead, qualification: { ...raw, score, tier, engine: fallback ? 'rules' : 'llm', qualified_at: new Date().toISOString() } } }];\n"
+      }
+    },
+    {
+      "id": "node-5",
+      "name": "Route by tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.qualification.tier }}",
+                    "rightValue": "hot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "hot"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.qualification.tier }}",
+                    "rightValue": "warm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "warm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.qualification.tier }}",
+                    "rightValue": "cold",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cold"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      }
+    },
+    {
+      "id": "node-6",
+      "name": "CRM upsert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { email: $json.contact.email, firstname: $json.contact.name, company: $json.contact.company, hs_lead_status: $json.qualification.tier, lead_score: $json.qualification.score } }) }}",
+        "options": {
+          "retry": {
+            "retry": {
+              "maxTries": 3,
+              "waitBetweenTries": 1000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "notes": "Swap for Airtable, Pipedrive, GoHighLevel or your own CRM endpoint."
+    },
+    {
+      "id": "node-7",
+      "name": "Notify sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/REPLACE/ME",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: \"\ud83d\udd25 Hot lead: \" + $json.contact.name + \" (\" + $json.contact.company + \") scored \" + $json.qualification.score + \"/100. Next: \" + $json.qualification.next_action }) }}",
+        "options": {}
+      },
+      "notes": "Slack incoming webhook. Any notification channel works."
+    },
+    {
+      "id": "node-8",
+      "name": "Auto-reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: \"sales@northwind.example\", to: $json.contact.email, subject: \"Re: your enquiry \u2014 next steps\", text: $json.qualification.draft_reply }) }}",
+        "options": {
+          "retry": {
+            "retry": {
+              "maxTries": 3,
+              "waitBetweenTries": 1000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "node-9",
+      "name": "Wait 3 days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        -120
+      ],
+      "webhookId": "leadflow-wait",
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "days"
+      }
+    },
+    {
+      "id": "node-10",
+      "name": "Day 3 follow-up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: \"sales@northwind.example\", to: $json.contact.email, subject: \"Worth a 20-minute call?\", text: \"Hi \" + $json.contact.name + \", just floating this back up \u2014 would a short call this week be useful?\" }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-11",
+      "name": "Nurture email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: \"sales@northwind.example\", to: $json.contact.email, subject: \"A case study you might like\", text: $json.qualification.draft_reply }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-12",
+      "name": "Archive",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        360
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "node-13",
+      "name": "Error alert",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "node-14",
+      "name": "Log failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/REPLACE/ME",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: \"LeadFlow error in \" + $json.workflow.name + \": \" + $json.execution.error.message }) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize lead": {
+      "main": [
+        [
+          {
+            "node": "LLM qualify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM qualify": {
+      "main": [
+        [
+          {
+            "node": "Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Route by tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by tier": {
+      "main": [
+        [
+          {
+            "node": "CRM upsert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nurture email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM upsert": {
+      "main": [
+        [
+          {
+            "node": "Notify sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify sales": {
+      "main": [
+        [
+          {
+            "node": "Auto-reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-reply": {
+      "main": [
+        [
+          {
+            "node": "Wait 3 days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 3 days": {
+      "main": [
+        [
+          {
+            "node": "Day 3 follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error alert": {
+      "main": [
+        [
+          {
+            "node": "Log failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
