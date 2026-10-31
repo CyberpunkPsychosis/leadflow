@@ -10,6 +10,18 @@ dead-letter queue instead of being dropped.
 
 ![Dashboard](screenshots/dashboard.png)
 
+## Share a live link
+
+The demo is a single Node process, so any tunnel works:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8899          # or:
+ssh -o StrictHostKeyChecking=no -R 80:localhost:8899 nokey@localhost.run
+```
+
+The URL changes when the tunnel restarts. The database lives in `data/state.json`,
+so a restart keeps the leads.
+
 ## What it demonstrates
 
 | Requirement from the brief | Where it lives |

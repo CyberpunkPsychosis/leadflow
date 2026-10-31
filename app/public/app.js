@@ -50,7 +50,7 @@ function renderStats() {
   $('#s-hot').textContent = s.byTier?.hot ?? 0;
   $('#s-hotrate').textContent = `${s.hotRate ?? 0}% of inbound`;
   $('#s-score').textContent = s.avgScore ?? 0;
-  $('#s-latency').textContent = `${s.avgQualifyMs ?? 0} ms`;
+  $('#s-latency').textContent = s.total && (s.avgQualifyMs ?? 0) < 1 ? '<1 ms' : `${s.avgQualifyMs ?? 0} ms`;
   $('#s-followups').textContent = s.pendingFollowups ?? 0;
   $('#s-outbox').textContent = `${s.outbox ?? 0} emails sent`;
   $('#s-dlq').textContent = s.dlq ?? 0;
@@ -179,12 +179,16 @@ $('#btn-seed').addEventListener('click', async () => {
   btn.disabled = true;
   btn.textContent = 'Qualifying…';
   try {
-    await api('/api/demo/seed', { method: 'POST' });
+    const res = await api('/api/demo/seed', { method: 'POST' });
     await api('/api/tick', { method: 'POST' });
     await refresh();
+    btn.textContent = res.created === 0 ? 'Demo batch already loaded' : 'Demo batch added';
+  } catch (err) {
+    console.error(err);
+    btn.textContent = 'Failed — try again';
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Run demo batch';
+    setTimeout(() => (btn.textContent = 'Run demo batch'), 1800);
   }
 });
 $('#btn-seed-2').addEventListener('click', () => $('#btn-seed').click());
@@ -253,18 +257,24 @@ $('#lead-form').addEventListener('submit', async (e) => {
 });
 
 async function boot() {
-  try {
-    const h = await api('/api/health');
-    const badge = $('#engine-badge');
-    if (h.llm === 'live') {
-      badge.className = 'badge badge-live';
-      badge.textContent = `AI live · ${h.model}`;
-    } else {
-      badge.className = 'badge badge-fallback';
-      badge.textContent = 'Rules engine (no API key)';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const h = await api('/api/health');
+      const badge = $('#engine-badge');
+      if (h.llm === 'live') {
+        badge.className = 'badge badge-live';
+        badge.textContent = `AI live · ${h.model}`;
+      } else {
+        badge.className = 'badge badge-fallback';
+        badge.textContent = 'Rules engine (no API key)';
+      }
+      await refresh();
+      return;
+    } catch (err) {
+      if (attempt === 2) console.error(err);
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     }
-  } catch {}
-  await refresh();
+  }
 }
 
 boot().catch((err) => console.error(err));

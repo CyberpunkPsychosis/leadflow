@@ -10,7 +10,7 @@ Workflows* (Pakistan, payment verified, $5–10/hr, posted 2h ago at time of wri
 Hi — I read your brief and built a working version of this pipeline before
 replying, so you can click through it instead of reading a promise.
 
-**Demo:** <DEMO_URL> · **Code:** <GITHUB_URL>
+**Demo:** https://a4403d74dd6f48.lhr.life · **Code:** <GITHUB_URL>
 
 What it does:
 - One webhook for every lead source (ads, landing pages, forms, WhatsApp/chat),
@@ -48,7 +48,7 @@ retries, a dead-letter queue, an audit trail and a 14-node n8n workflow export.
 **Tags:** n8n, AI Automation, Lead Generation, CRM Integration, OpenAI API,
 API Integration, Node.js, Webhook, Workflow Automation
 
-**Link:** <DEMO_URL>
+**Link:** https://a4403d74dd6f48.lhr.life
 
 **Images:** `screenshots/dashboard.png`, `screenshots/drawer.png`
 
@@ -74,7 +74,7 @@ quote the rest after the demo call.
 
 ## Before sending
 
-- [ ] Replace `<DEMO_URL>` with the live tunnel (it changes when restarted)
+- [ ] Check the demo link opens (it is an ephemeral tunnel; restart it if it dies)
 - [ ] Push the repo to GitHub and replace `<GITHUB_URL>` (or remove that line)
 - [ ] Attach the two screenshots to the portfolio item
 - [ ] Add 1 line about timezone overlap / response time (client is PKT, UTC+5)
